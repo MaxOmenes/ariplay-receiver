@@ -1,3 +1,0 @@
-repository='https://github.com/janbar/openssl-cmake.git'
-module=''
-tag='origin'
