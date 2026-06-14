@@ -20,6 +20,7 @@ static dnssd_t *g_dnssd   = nullptr;
 static JavaVM  *g_jvm     = nullptr;
 static jobject  g_cb      = nullptr;
 static jmethodID g_onVideoData    = nullptr;
+static jmethodID g_onAudioData    = nullptr;
 static jmethodID g_onConnected    = nullptr;
 static jmethodID g_onDisconnected = nullptr;
 
@@ -67,7 +68,17 @@ static void cb_conn_destroy(void *) {
     if (att) g_jvm->DetachCurrentThread();
 }
 
-static void   cb_audio_process(void *, raop_ntp_t *, audio_decode_struct *) {}
+static void cb_audio_process(void *, raop_ntp_t *, audio_decode_struct *data) {
+    if (!g_cb || !g_onAudioData || !data || !data->data || data->data_len == 0) return;
+    bool att; JNIEnv *env = attachEnv(att);
+
+    jbyteArray jbuf = env->NewByteArray(data->data_len);
+    env->SetByteArrayRegion(jbuf, 0, data->data_len, (jbyte *)data->data);
+    env->CallVoidMethod(g_cb, g_onAudioData, jbuf, (jint)data->ct);
+    env->DeleteLocalRef(jbuf);
+
+    if (att) g_jvm->DetachCurrentThread();
+}
 static void   cb_video_pause(void *)                                         {}
 static void   cb_video_resume(void *)                                        {}
 static void   cb_conn_feedback(void *)                                       {}
@@ -85,11 +96,13 @@ static void   cb_audio_remote_control_id(void *, const char *, const char *) {}
 static void   cb_audio_set_progress(void *, uint32_t *, uint32_t *, uint32_t *) {}
 static void   cb_audio_get_format(void *, unsigned char *ct, unsigned short *spf,
                                    bool *usingScreen, bool *isMedia, uint64_t *fmt) {
-    if (ct)          *ct          = 2;    /* AAC-ELD */
-    if (spf)         *spf         = 352;
+    // Do NOT override *ct — iPhone decides the codec (2=ALAC, 8=AAC-ELD)
+    // Just report that we support screen mirroring
+    if (spf)         *spf         = 480;   /* samples-per-frame for AAC-ELD */
     if (usingScreen) *usingScreen = true;
     if (isMedia)     *isMedia     = false;
     if (fmt)         *fmt         = 0;
+    LOGI("audio_get_format: ct=%d spf=%d", ct ? (int)*ct : -1, spf ? (int)*spf : -1);
 }
 static void   cb_video_report_size(void *, float *, float *, float *, float *) {}
 static int    cb_video_set_codec(void *, video_codec_t)                      { return 0; }
@@ -123,6 +136,7 @@ Java_com_example_airplayreceiverunai_AirPlayBridge_nativeStart(
     g_cb = env->NewGlobalRef(callback);
     jclass cls       = env->GetObjectClass(callback);
     g_onVideoData    = env->GetMethodID(cls, "onVideoData",    "([BZ)V");
+    g_onAudioData    = env->GetMethodID(cls, "onAudioData",    "([BI)V");
     g_onConnected    = env->GetMethodID(cls, "onConnected",    "()V");
     g_onDisconnected = env->GetMethodID(cls, "onDisconnected", "()V");
 

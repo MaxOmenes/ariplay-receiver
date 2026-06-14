@@ -4,12 +4,25 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_gradient">
+    android:background="@android:color/black">
 
-    <SurfaceView
-        android:id="@+id/surfaceView"
+    <!--
+        surfaceContainer is resized programmatically to maintain the video
+        aspect ratio. It is centered inside the root FrameLayout so black
+        bars appear on whichever sides are unused (pillarbox / letterbox).
+    -->
+    <FrameLayout
+        android:id="@+id/surfaceContainer"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:layout_gravity="center">
+
+        <SurfaceView
+            android:id="@+id/surfaceView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+    </FrameLayout>
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/overlay"
@@ -94,7 +107,7 @@
             android:id="@+id/statusText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Esperando AirPlay…"
+            android:text="Waiting for AirPlay…"
             android:textColor="#FFFFFF"
             android:textSize="22sp"
             android:textStyle="bold"

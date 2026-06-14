@@ -10,6 +10,7 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -18,6 +19,11 @@ import androidx.constraintlayout.widget.ConstraintLayout
 class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallback {
 
     private lateinit var surfaceView: SurfaceView
+    private lateinit var surfaceContainer: FrameLayout
+
+    // Video dimensions reported by the decoder; 0 = unknown (wait for first frame)
+    @Volatile private var videoWidth: Int = 0
+    @Volatile private var videoHeight: Int = 0
     private lateinit var overlay: ConstraintLayout
     private lateinit var statusText: TextView
     private lateinit var subtitleText: TextView
@@ -28,6 +34,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
     private lateinit var ring3: View
 
     @Volatile private var decoder: AirPlayDecoder? = null
+    private var audioPlayer: AirPlayAudioPlayer? = null
     private var nsdService: AirPlayNsdService? = null
     private var pulseAnimator: AnimatorSet? = null
 
@@ -40,6 +47,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
         setContentView(R.layout.activity_main)
 
         surfaceView = findViewById(R.id.surfaceView)
+        surfaceContainer = findViewById(R.id.surfaceContainer)
         overlay = findViewById(R.id.overlay)
         statusText = findViewById(R.id.statusText)
         subtitleText = findViewById(R.id.subtitleText)
@@ -49,7 +57,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
         ring2 = findViewById(R.id.ring2)
         ring3 = findViewById(R.id.ring3)
 
-        subtitleText.text = "Buscá '$deviceName' en tu Mac → Centro de Control → Duplicar pantalla"
+        subtitleText.text = "Find '$deviceName' on your Mac → Control Centre → Screen Mirroring"
 
         startPulse()
         surfaceView.holder.addCallback(this)
@@ -106,7 +114,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
         clearSurface()
         runOnUiThread {
             errorCard.visibility = View.GONE
-            statusText.text = "Esperando AirPlay…"
+            statusText.text = "Waiting for AirPlay…"
             overlay.visibility = View.VISIBLE
             overlay.alpha = 0f
             overlay.animate().alpha(1f).setDuration(400).start()
@@ -132,16 +140,21 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
     // ── SurfaceHolder.Callback ────────────────────────────────────────────────
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        decoder = AirPlayDecoder(holder.surface)
+        decoder = AirPlayDecoder(holder.surface) { w, h -> onVideoDimensions(w, h) }
+        audioPlayer = AirPlayAudioPlayer()
         startAirPlay()
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
+        applyAspectRatio()
+    }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         stopAirPlay()
         decoder?.release()
         decoder = null
+        audioPlayer?.release()
+        audioPlayer = null
     }
 
     // ── AirPlayCallback (called from JNI threads) ─────────────────────────────
@@ -150,6 +163,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
         val d = decoder
         if (d == null) { Log.w(TAG, "onVideoData: decoder is null"); return }
         d.onVideoData(data, isH265)
+    }
+
+    override fun onAudioData(data: ByteArray, ct: Int) {
+        if (data.size > 0 && Math.random() < 0.01) Log.d(TAG, "onAudioData received ${data.size} bytes, ct=$ct")
+        audioPlayer?.onAudioData(data, ct)
     }
 
     override fun onConnected() {
@@ -171,7 +189,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
         val ok = AirPlayBridge.nativeStart(serverPort, deviceName, hwAddr, this)
         if (!ok) {
             Log.e(TAG, "Failed to start native AirPlay server")
-            showError("No se pudo iniciar el servidor AirPlay")
+            showError("Failed to start AirPlay server")
             return
         }
 
@@ -194,6 +212,43 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback, AirPlayCallbac
         } catch (e: Exception) {
             "AA:BB:CC:DD:EE:FF"
         }
+    }
+
+    // ── Aspect ratio ──────────────────────────────────────────────────────────
+
+    /** Called by the decoder when it learns the real video dimensions. */
+    fun onVideoDimensions(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        videoWidth = width
+        videoHeight = height
+        runOnUiThread { applyAspectRatio() }
+    }
+
+    /**
+     * Resize [surfaceContainer] so it fits inside the parent while preserving
+     * the video aspect ratio. Black bars appear on the sides (letterbox/pillarbox).
+     */
+    private fun applyAspectRatio() {
+        val parent = surfaceContainer.parent as? View ?: return
+        val parentW = parent.width.takeIf { it > 0 } ?: return
+        val parentH = parent.height.takeIf { it > 0 } ?: return
+
+        val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
+        val parentAspect = parentW.toFloat() / parentH.toFloat()
+
+        val (newW, newH) = if (videoAspect >= parentAspect) {
+            // Video is wider → fit width, bars top/bottom
+            parentW to (parentW / videoAspect).toInt()
+        } else {
+            // Video is taller → fit height, bars left/right
+            (parentH * videoAspect).toInt() to parentH
+        }
+
+        val lp = surfaceContainer.layoutParams as FrameLayout.LayoutParams
+        lp.width = newW
+        lp.height = newH
+        surfaceContainer.layoutParams = lp
+        Log.d(TAG, "Aspect ratio applied: ${newW}x${newH} for video ${videoWidth}x${videoHeight}")
     }
 
     override fun onDestroy() {
